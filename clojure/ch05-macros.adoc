@@ -1,0 +1,657 @@
+= Macros
+:sectnums:
+:source-language: clojure
+
+* 함수가 추상화의 수단인 것처럼, 매크로는 추상화의 또다른 수단이다. 
+
+* 함수를 통해 반복적인 코드를 줄여나갈 수 있는 것처럼, 매크로를 통해서도 반복적인 코드를
+  줄여나갈 수 있다.
+
+* Lisps are a programmable programming languages. pass:q[<--] 매크로 때문에 가능
+** 프로그래머가 직접 구문을 첨가할 수 있다.
++
+[source]
+....
+(when-let [a 10]
+  (+ a 100))
+
+(when-let [a 10
+           b 20
+           c 30]
+  (+ a b c 100))
+; >> Syntax error macroexpanding clojure.core/when-let 
+;    (b 20 c 30) - failed: Extra input at: [:bindings]
+;                                      spec: :clojure.core.specs.alpha/binding
+
+(when-let [a 10]
+  (when-let [b 20]
+    (when-let [c 30]
+       (+ a b c 100))))
+; => 160
+
+(when-let* [a 10
+            b 20
+            c 30]
+  (+ a b c 100))
+....
+
+
+* 매크로는 컴파일 전에 확장된다.
++
+[listing]
+----
+  read-time    -->  macroexpansion-time --> compile-time --> run-time
+------------------------------------------------------------------------
+reader macros          normal macros
+----
++
+compile-time 이후에 매크로는 사라진다.
++
+[listing]
+----
+forms (컴파일 이전)       forms (컴파일 이후)               
+|-- special forms         |-- special forms
+|-- functions             `-- functions 
+`-- macros
+----
+
+* 매크로와 함수의 비교
++
+[listing]
+----
+코드   --> macro    --> 코드     (at compile time)
+
+데이터 --> function  --> 데이터   (at run time)
+----
++
+homoiconicity(동형성: homo -> the same, icon -> form): 코드와 데이터의 형태가 같다.
+
+
+== 왜 매크로가 필요한가?
+
+[source]
+....
+for (int i = 0; i < collection.size(); i++) {
+  SomeType var = (SomeType)collection.get(i);
+  ...
+}
+
+// since Java 5
+for (SomeType var : collection) {
+  ...
+}
+....
+
+
+[source]
+....
+(defmacro foreach [[sym coll] & body]
+  `(loop [coll# ~coll]
+         (when-let [[~sym & xs#] (seq coll#)]
+           ~@body
+           (recur xs#))))
+
+(foreach [x [1 2 3]]
+  (println x))
+; >> 1
+; >> 2
+; >> 3
+....
+
+* ``clojure.core``에 있는 매크로나 방금 위에서 만든 `foreach` 매크로나 대등한 지위를 갖고
+  있다.
+
+== Writing Your First Macro
+
+[listing]
+----
+                               매크로 확장 후 
+(reverse-it (nltnirp "foo")) ---------------> (println "foo")
+----
+
+
+[source]
+....
+(defmacro reverse-it [form]
+  (walk/postwalk #(if (symbol? %)
+                      (symbol (str/reverse (name %)))
+                    %)
+                  form))
+
+(reverse-it
+  (qesod [gra (egnar 5)]
+    (nltnirp (cni gra))))
+; >> 1
+; >> 2
+; >> 3
+; >> 4
+; >> 5
+; => nil
+
+
+(macroexpand-1 '(reverse-it
+                  (qesod [gra (egnar 5)]
+                    (nltnirp (cni gra)))))
+; => (doseq [arg (range 5)]
+;      (println (inc arg)))
+....
+
+
+== Debugging Macros
+
+[source]
+....
+(defn oops [arg]
+  (frobnicate arg))
+; >> #<CompilerException java.lang.Exception:
+;    Unable to resolve symbol: frobnicate in this context (NO_SOURCE_FILE:1)>
+
+
+(defmacro oops [arg]
+  `(frobnicate ~arg))
+
+
+;; 매크로가 확장될 때 에러는 포착되지 않는다.
+;; 매크로 확장이 끝난 후, 컴파일할 때 에러가 포착된다. 
+(oops 123)  ;  매크로 확장 후: (frobnicate 123) 
+; >> #<CompilerException java.lang.IllegalStateException:
+;    Var user/frobnicate is unbound. (NO_SOURCE_FILE:0)>
+....
+
+
+=== Macroexpansion
+
+* `macroexpand-1`: 주어진 form의 첫 번째 요소가 매크로이면, 이 매크로를 한 번만 확장한다.
++
+[source]
+....
+(macroexpand-1 '(reverse-it
+                  (qesod [gra (egnar 5)]
+                    (nltnirp (cni gra)))))
+; => (doseq [arg (range 5)]
+;      (println (inc arg)))
+....
+
+* `macroexapnd`: 주어진 form의 첫 번째 요소가 매크로이면, 이 매크로를 계속 확장한다.
++
+[source]
+....
+(macroexpand-1 '(reverse-it
+                  (qesod [gra (egnar 5)]
+                    (nltnirp (cni gra)))))
+; => (doseq [arg (range 5)]
+;      (println (inc arg)))
+
+(pprint (macroexpand '(reverse-it
+                        (qesod [gra (egnar 5)]
+                          (nltnirp (cni gra))))))
+; => (loop*
+;     [seq_6448
+;      (clojure.core/seq (range 5))
+;      chunk_6449
+;      nil
+;      count_6450
+;      0
+;      i_6451
+;      0]
+;     (if
+;      (clojure.core/< i_6451 count_6450)
+;      (clojure.core/let
+;       [arg (.nth chunk_6449 i_6451)]
+;       (do (println (inc arg)))
+;       (recur
+;        seq_6448
+;        chunk_6449
+;        count_6450
+;        (clojure.core/unchecked-inc i_6451)))
+;      (clojure.core/when-let
+;       [seq_6448 (clojure.core/seq seq_6448)]
+;       (if
+;        (clojure.core/chunked-seq? seq_6448)
+;        (clojure.core/let
+;         [c__6000__auto__ (clojure.core/chunk-first seq_6448)]
+;         (recur
+;          (clojure.core/chunk-rest seq_6448)
+;          c__6000__auto__
+;          (clojure.core/int (clojure.core/count c__6000__auto__))
+;          (clojure.core/int 0)))
+;        (clojure.core/let
+;         [arg (clojure.core/first seq_6448)]
+;         (do (println (inc arg)))
+;         (recur (clojure.core/next seq_6448) nil 0 0))))))
+....
+
+
+* `clojure.walk/macroexpand-all`: 모든 매크로를 모두 확장한다.
++
+[source]
+....
+(macroexpand '(cond
+                a b
+                c d))
+; => (if a
+;      b
+;     (clojure.core/cond c d))
+
+(w/macroexpand-all '(cond
+                      a b
+                      c d))
+; => (if a
+;      b
+;      (if c
+;        d
+;        nil))
+....
+
+
+== Macro Syntax
+
+=== 용어 정리
+
+[listing]
+----
+'   quote
+`   backquote (= syntax-quote or quasi-quote)
+~   unquote (= tilde)
+~@  unquote-splicing
+----
+
+
+* 간단한 매크로의 경우에는, 매크로 내에서 함수를 사용해 리스트를 반환해도 무방
++
+[source]
+....
+(defmacro hello
+    [name]
+  (list 'println name))
+
+(macroexpand '(hello "Brian"))
+; => (println "Brian")
+....
+
+* 하지만, 복잡한 매크로의 경우에는 매크로에서 주로 사용하는 syntax를 사용하는 것이 더 편리
++
+[source]
+....
+(defmacro while [test & body]
+  (list 'loop []
+    (concat (list 'when test) body)
+    '(recur)))
+
+(defmacro while [test & body]
+  `(loop []
+     (when ~test
+       ~@body
+       (recur))))
+
+
+(macroexpand-1 '(while (<= i 10)
+                  (println i)))
+; => (loop [] 
+;      (when (<= i 10)
+;        (println i)
+;        (recur)))
+....
+
+
+=== quote Versus syntax-quote
+
+* 차이점 1
+** quote의 경우는 namespace가 붙지 않는다
+** syntax-quote의 경우는 namespace가 붙는다.
++
+[source]
+....
+user> (def foo 123)
+#'user/foo
+
+user> [foo (quote foo) 'foo `foo]
+[123 foo foo user/foo]
+....
+
+* 차이점 2
+** quote의 경우는 무조건 evaulation(평가)을 수행하지 않는다.
+** syntax-quote의 경우는 unquote(~) 기호를 사용해 선별적으로 evaluation을 수행할 수 있다.
++
+[source]
+....
+(def a 10)
+(def b 20)
+
+'(+ a b)
+; => (+ a b)
+
+`(+ ~a b)
+; => (clojure.core/+ 10 user/b)
+
+
+(def foo 123)
+
+`(println ~(keyword (str foo)))
+; => (clojure.core/println :123)
+....
+
+
+=== The unquote-splicing operator `~@`
+
+[source]
+....
+(let [defs '((def x 123)
+             (def y 456))]
+  `(do ~@defs))
+; => (do (def x 123)
+;        (def y 456))
+....
+
+
+== When to Use Macros
+
+* 함수로 구현 가능한 것을 매크로로 구현하지 마라.
+* 함수와는 달리 매크로는 '1급 객체'가 아니어서, 함수의 인자나 리턴값으로 사용할 수 없다.
+
+[source]
+....
+(defn fn-hello [x]
+  (str "Hello, " x "!"))
+
+(defmacro macro-hello [x]
+  `(str "Hello, " ~x "!"))
+
+
+(fn-hello "Brian")
+; => "Hello, Brian!"
+
+(macro-hello "Brian")
+; => "Hello, Brian!"
+
+
+;; 매크로명은 변수에 대입할 수 없다
+(def my-macro macro-hello)
+; >> Caused by java.lang.RuntimeException
+;    Can't take value of a macro: #'clj-study.ch5/macro-hello
+
+
+(map fn-hello ["Brian" "Not Brian"])
+;= ("Hello, Brian!" "Hello, Not Brian!")
+
+;; 매크로명은 함수의 인자 자리에 놓일 수 없다
+(map macro-hello ["Brian" "Not Brian"])
+; => #<CompilerException java.lang.RuntimeException:
+;    Can't take value of a macro: #'user/macro-hello, compiling:(NO_SOURCE_PATH:1)>
+
+
+(map #(macro-hello %) ["Brian" "Not Brian"])
+; => ("Hello, Brian!" "Hello, Not Brian!")
+
+;; or
+(defmacro my-map [my-macro coll]
+  `(map #(~my-macro %) ~coll))
+
+(my-map macro-hello ["Brian" "Not Brian"])
+; => ("Hello, Brian!" "Hello, Not Brian!")
+....
+
+
+== Hygienic macros
+
+[source]
+....
+(defmacro unhygienic [& body]
+  `(let [x :oops]
+     ~@body))
+
+(unhygienic (println "x:" x))
+; => #<CompilerException java.lang.RuntimeException:
+;    Can't let qualified name: user/x, compiling:(NO_SOURCE_PATH:1)>
+
+(macroexpand-1 `(unhygienic (println "x:" x)))
+; => (clojure.core/let [user/x :oops]
+;      (clojure.core/println "x:" user/x))
+....
+
+
+[source]
+....
+(defmacro still-unhygienic [& body]
+  `(let [~'x :oops]
+     ~@body))
+
+(still-unhygienic (println "x:" x))
+; >> x: :oops
+; => nil
+
+(macroexpand-1 '(still-unhygienic
+                  (println "x:" x)))
+; => (clojure.core/let [x :oops]
+;      (clojure.core/println "x:" x))
+
+(let [x :this-is-important]
+  (still-unhygienic
+    (println "x:" x)))
+; >> x: :oops
+
+
+;;; variable shadowing
+; (let [x :this-is-important]
+;   (let [x :oops]
+;     (println "x:" x)))
+....
+
+
+=== Gensyms to the Rescue
+
+[source]
+....
+(gensym)   ; => G__2386
+(gensym)   ; => G__2391
+
+(gensym "sym")   ; => sym2396
+(gensym "sym")   ; => sym2402
+
+
+(defmacro hygienic [& body]
+  (let [sym (gensym)]
+    `(let [~sym :macro-value]
+       (println "inner:" ~sym)
+       ~@body)))
+
+(let [x :important-value]
+  (hygienic (println "x:" x)))
+; >> inner: :macro-value
+; >> x: :important-value
+....
+
+
+[source]
+.auto gensym
+....
+(defmacro hygienic [& body]
+  `(let [x# :macro-value]
+     ~@body))
+
+`(x# x#)
+; => (x__1447__auto__ x__1447__auto__)
+
+
+(defmacro auto-gensyms [& numbers]
+  `(let [x# (rand-int 10)]
+     (+ x# ~@numbers)))
+
+(auto-gensyms 1 2 3 4 5)
+; => 22
+
+(macroexpand-1 '(auto-gensyms 1 2 3 4 5))
+; => (clojure.core/let [x__570__auto__ (clojure.core/rand-int 10)]
+;      (clojure.core/+ x__570__auto__ 1 2 3 4 5))
+....
+
+
+[source]
+....
+[`x# `x#]
+; => [x__1450__auto__ x__1451__auto__]
+
+
+(defmacro our-doto [expr & forms]
+  `(let [obj# ~expr]
+     ~@(map (fn [[f & args]]
+                `(~f obj# ~@args)) forms)
+     obj#))
+
+(our-doto "It works."
+  (println "I can't believe it.")
+  (println "I still can't believe it."))
+; => #<CompilerException java.lang.RuntimeException:
+;     Unable to resolve symbol: obj__1456__auto__ in this context,
+;     compiling:(NO_SOURCE_PATH:1)>
+
+
+(defmacro our-doto [expr & forms]
+  (let [obj (gensym "obj")]
+    `(let [~obj ~expr]
+       ~@(map (fn [[f & args]]
+                  `(~f ~obj ~@args)) forms)
+       ~obj)))
+
+(our-doto "It works."
+  (println "I can't believe it.")
+  (println "I still can't believe it."))
+; >> It works. I can't believe it.
+; >> It works. I still can't believe it.
+; => "It works"
+....
+
+
+=== Double Evaluation
+
+[source]
+....
+(defmacro spy [x]
+  `(do
+     (println "spied" '~x ~x)
+     ~x))
+
+(spy 2)
+; >> spied 2 2
+; => 2
+
+(spy (rand-int 10))
+; >> spied (rand-int 10) 9
+; => 7
+
+
+(macroexpand-1 '(spy (rand-int 10)))
+; => (do
+;      (clojure.core/println "spied" '(rand-int 10) (rand-int 10))
+;      (rand-int 10))
+....
+
+[source]
+....
+(defmacro spy [x]
+  `(let [x# ~x]
+     (println "spied" '~x x#)
+     x#))
+
+(macroexpand-1 '(spy (rand-int 10)))
+; => (clojure.core/let [x__6519__auto__ (rand-int 10)]
+;      (clojure.core/println "spied" '(rand-int 10) x__6519__auto__)
+;     x__6519__auto__)
+
+(spy (rand-int 10))
+; >> spied (rand-int 10) 9
+; => 9
+....
+
+
+== Common Macro Idioms and Patterns
+
+* 매크로의 인자가 local binding을 가져야 하는 경우에는, ``clojure.core``의 관례를 따라 벡터
+  안에 위치시켜라.
++
+[source]
+....
+(let [a 42
+      b "abc"]
+  ...)
+
+(if-let [x (test)]
+  then
+  else)
+
+(with-open [in (input-stream ...)
+            out (output-stream ...)]
+  ...)
+
+(for [x (range 10)
+     y (range x)]
+  [x y])
+....
+
+* var를 정의하는 매크로는 ``def``로 시작하라.
+** 예: `defn`, `defn-`, `defmacro`, ...
+
+* ``def``로 정의하는 매크로의 첫 번째 인자에 var의 이름을 두어라.
+
+* ``def``로 정의하는 매크로에서 한 개의 var만을 정의할 수 있도로 하라.
+
+
+
+== The Implicit Arguments: `&env` and `&form`
+
+=== `&env`
+
+``&env``는 이 매크로를 호출한 시점에, 이 매크로를 감싸고 있는, 모든 local symbol들이 담긴
+map이다.
+
+[source]
+....
+(defmacro spy-env []
+  (let [ks (keys &env)]
+    `(prn (zipmap '~ks [~@ks]))))
+
+(let [x 1 y 2]
+  (spy-env)
+  (+ x y))
+; >> {x 1, y 2}
+; => 3
+....
+
+
+=== `&form`
+
+``&form``은 매크로를 호출할 때의 form이 담겨 있는 리스트다.
+
+[source]
+....
+(defmacro ontology [& triples]   ; line 164
+  (every? #(or (== 3 (count %))
+               (throw (IllegalArgumentException.
+                       (dbgn (format "`%s` provided to `%s` on line %s has < 3 elements"
+                                     %
+                                     (first &form)
+                                     (-> &form meta :line))))))
+          triples)
+  ;; ...
+  )
+
+(ontology ["Boston" :capital-of])   ; line 175
+; >> dbgn: (format "`%s` provided to `%s` on line %s has < 3 elements" p1__6580#  ... =>
+;    | p1__6580# =>
+;    |   ["Boston" :capital-of]
+;    | &form =>
+;    |   (ontology ["Boston" :capital-of])
+;    | (first &form) =>
+;    |   ontology
+;    | (meta &form) =>
+;    |   {:line 175, :column 1}
+;    | (:line (meta &form)) =>
+;    |   175
+;    | (format "`%s` provided to `%s` on line %s has < 3 elements" p1__6580#  ... =>
+;    |   "`[\"Boston\" :capital-of]` provided to `ontology` on line 175 has < 3 elements"
+....
+
+
+
+
+

@@ -786,7 +786,489 @@ vars            X                         O
 * 참고: 교재 p. 197
 
 
+=== Vars
+
+==== Vars Are Not Variables
+
+[source]
+....
+(def x 80)
+
+(defn never-do-this []
+  (def x 123)
+  (def y 456)
+  (def x (+ x y))
+  x)
+
+(never-do-this)   ; => 579
+x                 ; => 579
+....
+
+
+==== vars의 용도
+
+* 주로 개발 도구를 구현할 때 이용된다.
+
+* 다른 언어에서의 전역 상수(?)의 역할을 수행한다.
+
+* var의 값을 변경할 수는 있지만, 주로 개발시에만 이용해야 한다.
+
+
+[source]
+....
+(def a 10)
+(def b a)
+(def c #'a)
+
+; symbol      var       value
+; ------------------------------
+; a  --->    #'a  --->   10
+;                        ^
+;                        |
+; b  --->    #'b  --------
+
+
+; a  --->    #'a  --->   10
+;             ^   
+;             |
+; c  --->    #'c
+
+
+(def a 20)
+
+b   ; => 10
+c   ; => #'user/a
+@c  ; => 20
+
+
+; symbol      var       value
+; ------------------------------
+; a  --->    #'a  --->   20
+;             ^   
+;             |
+; c  --->    #'c
+....
+
+
+==== Private vars
+
+[source]
+....
+user> (def ^:private everything 42)
+
+; 위와 동일
+; (def ^{:private true} everything 42)
+
+; 다른 namespace로 이동
+user> (ns other-namespace)
+
+; user namespace를 refer하더라도 public var들만 참조 가능
+other-namespace> (refer 'user)
+
+other-namespace> everything
+; >> #<CompilerException java.lang.RuntimeException:
+;    Unable to resolve symbol: everything in this context, compiling:(NO_SOURCE_PATH:0)>
+
+; var를 통해서는 접근 가능
+other-namespace> @#'user/everything
+; => 42
+....
+
+[source]
+.private function
+....
+user> (defn- my-add [a b]
+        (+ a b))
+
+user> (ns other-namespace)
+
+other-namespace> (refer 'user)
+
+; private function 테스트할 때 유용
+other-namespace> (#'user/my-add 10 20) 
+30
+....
+
+
+[source]
+.with-redefs
+....
+(ns http)
+
+(defn post [url]
+  {:body "Hello world"})
+
+
+;; 다른 namespace에서
+(ns app
+  (:require [clojure.test :refer [deftest is run-tests]]))
+
+(deftest is-a-macro
+  (with-redefs [http/post (fn [url] {:body "Goodbye world"})]
+    (is (= {:body "Goodbye world"} (http/post "http://service.com/greet")))))
+
+(run-tests) ;; test is passing
+....
+
+
+==== Var and metadata
+
+* var에 metadata가 붙어 있어서, metadata를 읽으려먼 var를 통해야 한다.
+
+[source]
+....
+(def a
+  "A sample value."
+ 5)
+
+(meta #'a)
+; => {:ns #<Namespace user>, :name a, :doc "A sample value.",
+;     :line 1, :file "NO_SOURCE_PATH"}
+
+(doc a)
+; -------------------------
+; user/a
+; A sample value.
+
+(alter-meta! #'a assoc :doc "A dummy value.")
+
+(doc a)
+; -------------------------
+; user/a
+; A dummy value.
+....
+
+==== Constant
+
+[source]
+....
+(def max-value 250)
+
+(defn valid-value? [v]
+  (<= v max-value))
+
+(valid-value? 218)   ; => true
+(valid-value? 299)   ; => false
+....
+
+[source]
+....
+(def ^:const max-value 250)
+
+(defn valid-value? [v]
+  (<= v max-value))
+
+; 위의 코드는 다음의 코드와 같다.
+; (defn valid-value? [v]
+;   (<= v 250))
+
+(def max-value 500)
+(valid-value? 299)   ; => false
+....
+
+
+==== Dynamic binding: Thread-local changes
+
+[source]
+....
+(def ^:dynamic *var* :root)
+
+(defn get-*var* [] (println *var*))
+
+
+(get-*var*)             ; >> :root
+
+(binding [*var* :a]
+  (get-*var*)           ; >> :a
+
+  (binding [*var* :b]
+    (get-*var*)         ; >> :b
+
+    (binding [*var* :c]
+      (get-*var*))      ; >> :c
+
+    (get-*var*))        ; >> :b
+
+  (get-*var*))          ; >> :a
+
+(get-*var*)             ; >> :root
+....
+
+
+* Visualizing dynamic scope.: 교재 p.203
+
+* Dynamic var의 경우는, 대개 상위 코드에서 ``binding``으로 설정한 값을 하위 코드에서 읽어
+  들이는 방식으로 동작한다.
+
+* 하지만 하위 코드에서 `set!` 함수를 통해 var를 설정할 수도 있다.
+
+[source]
+....
+(def ^:dynamic *response-code* nil)
+
+(defn http-get [url-string]
+  (let [conn (-> url-string java.net.URL. .openConnection)
+        response-code (.getResponseCode conn)]
+    (when (thread-bound? #'*response-code*)
+      (set! *response-code* response-code))
+    (when (not= 404 response-code) (-> conn .getInputStream slurp))))
+
+(http-get "http://google.com")
+; => "<!doctype html><html><head>..."
+
+*response-code*
+; => nil
+
+(binding [*response-code* nil]
+  (let [content (http-get "http://google.com/bad-url")]
+    (println "Response code was:" *response-code*)
+    ; ... do something with `content` if it is not nil ...
+    ))
+; => Response code was: 404
+....
+
+
+==== Changing a var's root binding
+
+* Aspect-oriented programming에 이용 가능
+
+[source]
+....
+ (defn square [n] 
+  "Squares a number"
+  (* n n))
+
+(defn wrap-fn [f]
+  (fn [num]
+    (println "square starts.")
+    (let [result (f num)]
+      (println "square ends.")
+      result) ))
+
+(alter-var-root #'square wrap-fn)
+
+(square 10)
+; >> square starts.
+; >> square ends.
+; => 100
+....
 
 
 
+==== Forward Declarations
+
+[source]
+....
+(declare complex-helper-fn other-helper-fn)
+
+
+(defn public-api-function [arg1 arg2]
+  ,,,
+  (other-helper-fn arg1 arg2 (complex-helper-fn arg1 arg2))
+
+
+(defn- complex-helper-fn [arg1 arg2]
+  ,,,)
+
+(defn- other-helper-fn [arg1 arg2 arg3]
+  ,,,)
+....
+
+
+=== Agents
+
+==== 특징
+
+* Uncoordinated: 다른 agent와 독립적으로 실행된다. 
+
+* Asynchronous: ``send``와 ``send-off``를 이용해 agent를 호출하는 쓰레드와, agent를
+                실행하는 쓰레드가 별개이다.
+** agent를 실행하는 send의 경우
++
+[source]
+....
+(def a (agent 10))
+
+(send a inc)
+....
+
+** ref를 실행하는 ``dosync``의 경우는, ``dosync``를 호출하는 쓰레드와 ``dosync``를 실행하는 쓰레드가 동일하다. 
++
+[source] 
+....
+(def names (ref []))
+
+(defn add-name [name]
+  (dosync
+    (alter names conj name)))
+
+(future (add-name "zack"))
+....
+
+* atom, ref와는 다르게 side-effect 함수를 안전하게 처리할 수 있다.
+** STM-aware: STM 내에서 사용할 수 있다. 즉, `dosync` 내에서 호출되어 retry가 여러 번
+   일어나더라도, dosync 내에서 호출되는 agent는 dosync가 commit될 때 단 한 번만
+   호출된다. (교재 p.217 참고)
+
+* 각각의 agent는 한 개의 queue를 갖고 있다. `send`/`send-off` 함수가 보내온 작업을 이
+  queue에 쌓아두고 보내온 순서대로 한 개씩 처리한다.
+
+
+==== `send` & `send-off`
+
+* `send`
+** 고정된 크기(CPU core 수 * 2)의 thread-pool에서 nonblocking, CPU-bound actions들을 처리.
+
+* `send-off`
+** 무제한의 크기를 가질 수 있는 thread-pool(future와 공유)에서 blocking, non-CPU-bound
+   actions들을 처리.
+
+* 교재 p. 210 그림 참조
+
+
+==== 사용 예제
+
+[source]
+.에제 1
+....
+(def a (agent 500))
+
+(send a range 1000)
+@a   ; => (500 501 502 503 504 ... 999)
+....
+
+
+[source]
+.에제 2
+....
+(def b (agent 10))
+
+(send b inc)
+(send b inc)
+
+@b   ; => 12
+....
+
+
+[source]
+.`await` 에제
+....
+(def a (agent 5000))
+(def b (agent 10000))
+
+(send-off a (fn [ms] (Thread/sleep ms) 10))
+(send-off b (fn [ms] (Thread/sleep ms) 20))
+
+@a   ; => 5000
+
+(await a b)
+
+@a   ; => 10
+@b   ; => 20
+....
+
+
+==== Dealing with Errors in Agent Actions
+
+[source]
+....
+(def a (agent 10))
+
+(send a (fn [_] (throw (Exception. "something is wrong"))))
+
+a    ; => #<Agent@3d582527 FAILED: 10>
+@a   ; => 10
+
+(send a inc)
+; >> Caused by java.lang.Exception
+;    something is wrong
+....
+
+
+[source]
+....
+(restart-agent a 42)
+
+(send a inc)
+
+(reduce send a (for [x (range 3)]
+                 (fn [_] (throw (Exception. (str "error #" x))))))
+
+(agent-error a)
+; => #<Exception java.lang.Exception: error #0>
+
+(restart-agent a 42)
+(agent-error a)
+; => #<Exception java.lang.Exception: error #1>
+
+(restart-agent a 42 :clear-actions true)
+
+(agent-error a)
+; => nil
+
+@a   ; => 42
+....
+
+
+===== Agent error handlers and modes
+
+[listing]
+.:error-mode
+----
+  :fail (default)
+  :continue
+----
+
+[source]
+....
+(def a (agent 10 :error-mode :continue))
+
+(send a (fn [_] (throw (Exception. "something is wrong"))))
+; => #<Agent@44a5b703: 10>
+
+(send a identity)
+;= #<Agent@44a5b703: 10>
+....
+
+
+[source]
+....
+(def a (agent 20
+              :error-mode :continue
+              :error-handler (fn [the-agent exception]
+                               (.println System/out (.getMessage exception)))))
+
+(send a (fn [_] (throw (Exception. "something is wrong"))))
+; >> something is wrong
+; => #<Agent@bb07c59: 20>
+
+(send a identity)
+: => #<Agent@bb07c59: 20>
+....
+
+
+== Using Java's Concurrency Primitives
+
+* Java interop을 통해서 `java.util.concurrent.*` 패키지들이 제공하는 동시성 처리
+  클래스들을 직접 이용할 수도 있다.
+
+=== Locking
+
+[source]
+....
+(defn add [some-list value]
+  (locking some-list
+    (.add some-list value)))
+....
+
+
+[source]
+....
+// Java
+public static void add (java.util.List someList, Object value) {
+  synchronized (someList) {
+    someList.add(value);
+  }
+}
+....
 
